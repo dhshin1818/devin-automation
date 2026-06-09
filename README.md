@@ -174,6 +174,8 @@ Multiple CVEs exist in older Pillow versions affecting image parsing.
 
 **Startup session loader** — on startup the app calls the Devin API and loads all existing sessions automatically. The dashboard is never empty even after a restart.
 
+**Archived session filtering** — sessions marked as archived in Devin are automatically excluded from the dashboard. Only active and completed sessions relevant to the configured repository are shown.
+
 **Service account** — all Devin sessions are created under a named service user (`superset-remediation-bot`) rather than under any individual's credentials. Every action is fully auditable and scoped to only the permissions it needs. This is standard practice for automation in regulated environments.
 
 **Generic prompt design** — the prompt sent to Devin is intentionally issue-agnostic. It passes the issue title, body, and URL directly to Devin and lets it reason about what needs to be done. This means the same system handles dependency upgrades, security fixes, documentation, test coverage, and any other issue type without any changes to the code.

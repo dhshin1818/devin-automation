@@ -110,21 +110,25 @@ async def github_webhook(request: Request):
 
 
 def refresh_sessions():
-    """Poll Devin API for latest status on all tracked sessions"""
-    for session in sessions:
-        session_id = session["session_id"]
-        if session_id:
-            try:
-                result = get_session_status(session_id)
-                session["status"] = result.get("status", "unknown")
-                session["status_detail"] = result.get("status_detail", "")
-                session["pr_url"] = result.get("pull_requests", [{}])[0].get("pr_url", "") if result.get("pull_requests") else ""
-                session["pr_state"] = result.get("pull_requests", [{}])[0].get("pr_state", "") if result.get("pull_requests") else ""
-                session["updated_at"] = result.get("updated_at")
+    """Poll Devin API once and update all tracked sessions"""
+    try:
+        result = list_all_sessions()
+        latest = {s["session_id"]: s for s in result.get("sessions", [])}
+        
+        for session in sessions:
+            session_id = session["session_id"]
+            if session_id in latest:
+                updated = latest[session_id]
+                session["status"] = updated.get("status", "unknown")
+                session["status_detail"] = updated.get("status_detail", "")
+                pull_requests = updated.get("pull_requests", [])
+                session["pr_url"] = pull_requests[0].get("pr_url", "") if pull_requests else ""
+                session["pr_state"] = pull_requests[0].get("pr_state", "") if pull_requests else ""
+                session["updated_at"] = updated.get("updated_at")
                 if not session["created_at"]:
-                    session["created_at"] = result.get("created_at")
-            except Exception as e:
-                print(f"Could not refresh session {session_id}: {e}")
+                    session["created_at"] = updated.get("created_at")
+    except Exception as e:
+        print(f"Could not refresh sessions: {e}")
 
 
 @app.get("/status")

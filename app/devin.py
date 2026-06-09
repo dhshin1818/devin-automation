@@ -58,13 +58,14 @@ def get_session_status(session_id: str) -> dict:
 
 
 def list_all_sessions() -> dict:
-    """List all Devin sessions for the configured repo only"""
+    """List all Devin sessions for the configured repo only, excluding archived"""
     
     repo = os.getenv("GITHUB_REPO", "")
     
     response = httpx.get(
         f"{BASE_URL}/sessions",
-        headers=HEADERS
+        headers=HEADERS,
+        timeout=10.0
     )
     
     data = response.json()
@@ -72,13 +73,14 @@ def list_all_sessions() -> dict:
     
     filtered = []
     for s in all_sessions:
+        if s.get("is_archived", False):
+            continue
         pull_requests = s.get("pull_requests", [])
         if pull_requests:
             if any(repo in pr.get("pr_url", "") for pr in pull_requests):
                 filtered.append(s)
         else:
-            # No PR yet — include only if session was created via webhook
-            # (startup load skips these since we can't verify repo)
             pass
     
     return {"sessions": filtered}
+
