@@ -13,7 +13,11 @@ GitHub fires webhook to this app
         ↓
 App verifies request and calls Devin API
         ↓
-Devin works autonomously in its virtual space and opens a pull request
+Devin works autonomously and opens a pull request
+        ↓
+CI pipeline runs automated checks
+        ↓
+Engineer reviews and merges the pull request
         ↓
 Dashboard tracks every session in real time
 ```
