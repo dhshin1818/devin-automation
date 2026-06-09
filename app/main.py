@@ -42,6 +42,9 @@ def refresh_sessions():
         result = list_all_sessions()
         latest = {s["session_id"]: s for s in result.get("sessions", [])}
 
+        if latest:
+            sessions[:] = [s for s in sessions if s["session_id"] in latest]
+
         for session in sessions:
             if session["status"] in ("exit", "error"):
                 continue

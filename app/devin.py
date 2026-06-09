@@ -76,11 +76,9 @@ def list_all_sessions() -> dict:
         if s.get("is_archived", False):
             continue
         pull_requests = s.get("pull_requests", [])
-        if pull_requests:
-            if any(repo in pr.get("pr_url", "") for pr in pull_requests):
-                filtered.append(s)
-        else:
-            pass
-    
+        if pull_requests and not any(repo in pr.get("pr_url", "") for pr in pull_requests):
+            continue
+        filtered.append(s)
+
     return {"sessions": filtered}
 
