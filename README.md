@@ -20,6 +20,63 @@ Dashboard tracks every session in real time
 
 ---
 
+## Architecture
+
+### Automation pipeline
+
+When a GitHub issue is opened, the event travels through the system end to end:
+
+```mermaid
+sequenceDiagram
+    participant GH as GitHub
+    participant App as FastAPI App
+    participant Devin as Devin API
+    participant Repo as Superset Fork
+
+    GH->>App: POST /webhook (issue.opened)
+    App->>App: Verify HMAC-SHA256 signature
+    App->>Devin: POST /sessions (issue title + body + URL)
+    Devin->>Repo: Explores codebase, implements fix
+    Devin->>Repo: Opens pull request
+    loop Every 5 seconds
+        App->>Devin: GET /sessions (background poll)
+        Devin-->>App: Status + PR URL
+    end
+```
+
+### Real-time dashboard
+
+The dashboard does not reload the page. A background loop polls Devin independently, and SSE pushes the result to the browser:
+
+```mermaid
+flowchart LR
+    Devin[Devin API]
+    BG[Background\npoll loop]
+    Mem[(In-memory\nsession store)]
+    SSE[SSE endpoint\n/stream]
+    Browser[Browser\ndashboard]
+
+    Devin -->|every 5s| BG
+    BG -->|updates| Mem
+    Mem -->|every 5s| SSE
+    SSE -->|EventSource push| Browser
+```
+
+### Component overview
+
+```mermaid
+graph TD
+    main[main.py\nFastAPI · webhook · SSE · lifespan]
+    devin[devin.py\nDevin API client]
+    dashboard[dashboard.py\nHTML + JS dashboard]
+
+    main -->|start session / list sessions| devin
+    main -->|render initial HTML| dashboard
+    main -->|background poll| devin
+```
+
+---
+
 ## Project structure
 
 ```
@@ -126,7 +183,7 @@ The dashboard shows:
 
 - Summary metrics at the top — total sessions, completed, in progress, waiting, failed, PRs merged
 - A session table with title, Devin session link, status, pull request link, Devin Review link, PR state, created time, and last updated time
-- Auto-refreshes every 5 seconds
+- Updates live via Server-Sent Events (SSE) — no page reloads
 
 ---
 

@@ -2,15 +2,108 @@ from datetime import datetime, timezone
 
 
 def format_time(unix_timestamp):
-    """Convert Unix timestamp to readable string"""
     if not unix_timestamp:
         return "—"
     dt = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc)
     return dt.strftime("%d %b %Y %H:%M UTC")
 
 
-def get_dashboard_html(sessions: list) -> str:
+_SCRIPT = """
+<script>
+    const es = new EventSource('/stream');
+    es.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        updateMetrics(data);
+        updateTable(data);
+    };
 
+    function formatTime(unix) {
+        if (!unix) return '—';
+        const d = new Date(unix * 1000);
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        const mon = months[d.getUTCMonth()];
+        const year = d.getUTCFullYear();
+        const h = String(d.getUTCHours()).padStart(2, '0');
+        const m = String(d.getUTCMinutes()).padStart(2, '0');
+        return `${day} ${mon} ${year} ${h}:${m} UTC`;
+    }
+
+    function statusBadge(status, statusDetail) {
+        if (statusDetail === 'waiting_for_user') return { color: 'orange', emoji: '💬', label: 'WAITING FOR USER' };
+        const map = {
+            'new':       { color: '#8b949e', emoji: '🆕', label: 'NEW' },
+            'claimed':   { color: '#8b949e', emoji: '📋', label: 'CLAIMED' },
+            'running':   { color: '#3b82f6', emoji: '⏳', label: 'RUNNING' },
+            'suspended': { color: 'orange',  emoji: '⏸️', label: 'SUSPENDED' },
+            'resuming':  { color: '#3b82f6', emoji: '▶️', label: 'RESUMING' },
+            'exit':      { color: 'green',   emoji: '✅', label: 'COMPLETED' },
+            'error':     { color: 'red',     emoji: '❌', label: 'ERROR' },
+        };
+        return map[status] || { color: 'gray', emoji: '❓', label: status.toUpperCase() };
+    }
+
+    function prStateBadge(state) {
+        if (state === 'merged') return '<span style="color:green">merged</span>';
+        if (state === 'open')   return '<span style="color:#3b82f6">open</span>';
+        if (state === 'closed') return '<span style="color:gray">closed</span>';
+        return '—';
+    }
+
+    function prLinks(prUrl) {
+        if (!prUrl) return { pr: '—', review: '—' };
+        try {
+            const parts = prUrl.replace(/\\/$/, '').split('/');
+            const owner = parts[3], repo = parts[4], num = parts[6];
+            const reviewUrl = `https://app.devin.ai/review/${owner}/${repo}/pull/${num}`;
+            return {
+                pr:     `<a href="${prUrl}" target="_blank">#${num}</a>`,
+                review: `<a href="${reviewUrl}" target="_blank">Review</a>`
+            };
+        } catch(e) {
+            return { pr: `<a href="${prUrl}" target="_blank">View PR</a>`, review: '—' };
+        }
+    }
+
+    function updateMetrics(sessions) {
+        document.getElementById('m-total').textContent     = sessions.length;
+        document.getElementById('m-completed').textContent = sessions.filter(s => s.status === 'exit').length;
+        document.getElementById('m-running').textContent   = sessions.filter(s => ['running','claimed','new','resuming'].includes(s.status)).length;
+        document.getElementById('m-waiting').textContent   = sessions.filter(s => s.status_detail === 'waiting_for_user').length;
+        document.getElementById('m-failed').textContent    = sessions.filter(s => s.status === 'error').length;
+        document.getElementById('m-merged').textContent    = sessions.filter(s => s.pr_state === 'merged').length;
+    }
+
+    function updateTable(sessions) {
+        const tbody = document.getElementById('session-tbody');
+        const sorted = [...sessions].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        if (!sorted.length) {
+            tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;padding:24px;color:#8b949e'>No sessions yet — waiting for GitHub issues...</td></tr>";
+            return;
+        }
+        tbody.innerHTML = sorted.map(s => {
+            const devinUrl = s.session_id ? `https://app.devin.ai/sessions/${s.session_id}` : '#';
+            const sid = (s.session_id || '').slice(0, 16);
+            const badge = statusBadge(s.status, s.status_detail);
+            const links = prLinks(s.pr_url);
+            return `<tr>
+                <td><a href="${s.issue_url || '#'}" target="_blank">${s.issue_title || '—'}</a></td>
+                <td><a href="${devinUrl}" target="_blank">${sid}...</a></td>
+                <td style="color:${badge.color}"><strong>${badge.emoji} ${badge.label}</strong></td>
+                <td>${links.pr}</td>
+                <td>${links.review}</td>
+                <td>${prStateBadge(s.pr_state)}</td>
+                <td style="font-size:12px;color:#8b949e">${formatTime(s.created_at)}</td>
+                <td style="font-size:12px;color:#8b949e">${formatTime(s.updated_at)}</td>
+            </tr>`;
+        }).join('');
+    }
+</script>
+"""
+
+
+def get_dashboard_html(sessions: list) -> str:
+    """Render the full dashboard HTML page from the current session list."""
     total = len(sessions)
     completed = sum(1 for s in sessions if s.get("status") == "exit")
     running = sum(1 for s in sessions if s.get("status") in ("running", "claimed", "new", "resuming"))
@@ -112,7 +205,6 @@ def get_dashboard_html(sessions: list) -> str:
     <html>
     <head>
         <title>Devin Remediation Dashboard</title>
-        <meta http-equiv="refresh" content="5">
         <style>
             body {{
                 font-family: Arial, sans-serif;
@@ -120,7 +212,7 @@ def get_dashboard_html(sessions: list) -> str:
                 color: #c9d1d9;
                 padding: 40px;
             }}
-            h1 {{ color: #58a6ff; margin-bottom: 4px; }}
+            h1 {{ color: #58a6ff; margin-top: 0; margin-bottom: 4px; }}
             p {{ color: #8b949e; font-size: 13px; margin-top: 4px; }}
             .header {{
                 display: flex;
@@ -199,33 +291,32 @@ def get_dashboard_html(sessions: list) -> str:
                 <h1>Devin Session Dashboard</h1>
                 <p>For Repo: superset-cognition-demo</p>
             </div>
-            <span class="badge">Auto-refreshes every 5s</span>
         </div>
 
         <div class="metrics">
             <div class="metric">
                 <div class="metric-label">Total</div>
-                <div class="metric-value">{total}</div>
+                <div class="metric-value" id="m-total">{total}</div>
             </div>
             <div class="metric">
                 <div class="metric-label">Completed</div>
-                <div class="metric-value" style="color:green">{completed}</div>
+                <div class="metric-value" style="color:green" id="m-completed">{completed}</div>
             </div>
             <div class="metric">
                 <div class="metric-label">In progress</div>
-                <div class="metric-value" style="color:#3b82f6">{running}</div>
+                <div class="metric-value" style="color:#3b82f6" id="m-running">{running}</div>
             </div>
             <div class="metric">
                 <div class="metric-label">Waiting</div>
-                <div class="metric-value" style="color:orange">{waiting}</div>
+                <div class="metric-value" style="color:orange" id="m-waiting">{waiting}</div>
             </div>
             <div class="metric">
                 <div class="metric-label">Failed</div>
-                <div class="metric-value" style="color:red">{failed}</div>
+                <div class="metric-value" style="color:red" id="m-failed">{failed}</div>
             </div>
             <div class="metric">
                 <div class="metric-label">PRs merged</div>
-                <div class="metric-value" style="color:#238636">{merged}</div>
+                <div class="metric-value" style="color:#238636" id="m-merged">{merged}</div>
             </div>
         </div>
 
@@ -242,7 +333,7 @@ def get_dashboard_html(sessions: list) -> str:
                     <th>Last updated</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="session-tbody">
                 {rows}
             </tbody>
         </table>
@@ -257,6 +348,7 @@ def get_dashboard_html(sessions: list) -> str:
             <span>✅ Completed</span>
             <span>❌ Error</span>
         </div>
+        {_SCRIPT}
     </body>
     </html>
     """

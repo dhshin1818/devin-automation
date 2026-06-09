@@ -1,24 +1,24 @@
 import hmac
 import hashlib
-import httpx
 import os
 import json
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from dotenv import load_dotenv
-from devin import start_devin_session, get_session_status, list_all_sessions
+from devin import start_devin_session, list_all_sessions
 from dashboard import get_dashboard_html
 
 load_dotenv()
 
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
 
-app = FastAPI()
-
 sessions = []
 
 
 def build_session_entry(raw: dict) -> dict:
+    """Normalise a raw Devin API session dict into the flat shape used internally."""
     pull_requests = raw.get("pull_requests", [])
     pr_url = pull_requests[0].get("pr_url", "") if pull_requests else ""
     pr_state = pull_requests[0].get("pr_state", "") if pull_requests else ""
@@ -36,9 +36,40 @@ def build_session_entry(raw: dict) -> dict:
     }
 
 
-@app.on_event("startup")
-async def load_existing_sessions():
-    """On startup, pull all existing Devin sessions into the dashboard"""
+def refresh_sessions():
+    """Poll Devin API once and update all active tracked sessions"""
+    try:
+        result = list_all_sessions()
+        latest = {s["session_id"]: s for s in result.get("sessions", [])}
+
+        for session in sessions:
+            if session["status"] in ("exit", "error"):
+                continue
+            session_id = session["session_id"]
+            if session_id in latest:
+                updated = latest[session_id]
+                session["status"] = updated.get("status", "unknown")
+                session["status_detail"] = updated.get("status_detail", "")
+                pull_requests = updated.get("pull_requests", [])
+                session["pr_url"] = pull_requests[0].get("pr_url", "") if pull_requests else ""
+                session["pr_state"] = pull_requests[0].get("pr_state", "") if pull_requests else ""
+                session["updated_at"] = updated.get("updated_at")
+                if not session["created_at"]:
+                    session["created_at"] = updated.get("created_at")
+    except Exception as e:
+        print(f"Could not refresh sessions: {e}")
+
+
+async def poll_loop():
+    """Background task that polls Devin every 5 seconds and updates session state in memory."""
+    while True:
+        await asyncio.sleep(5)
+        await asyncio.to_thread(refresh_sessions)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Load existing sessions from Devin on startup and run the background poll loop."""
     global sessions
     try:
         result = list_all_sessions()
@@ -47,10 +78,16 @@ async def load_existing_sessions():
         print(f"Loaded {len(sessions)} existing Devin sessions on startup")
     except Exception as e:
         print(f"Could not load existing sessions: {e}")
+    task = asyncio.create_task(poll_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 def verify_github_signature(payload: bytes, signature: str) -> bool:
-    """Verify the webhook came from GitHub and not someone else"""
+    """Return True if the request signature matches the shared webhook secret."""
     expected = "sha256=" + hmac.new(
         GITHUB_WEBHOOK_SECRET.encode(),
         payload,
@@ -61,8 +98,7 @@ def verify_github_signature(payload: bytes, signature: str) -> bool:
 
 @app.post("/webhook")
 async def github_webhook(request: Request):
-    """Receives GitHub issue events and triggers Devin"""
-
+    """Receive a GitHub issue event, verify its signature, and start a Devin session."""
     signature = request.headers.get("X-Hub-Signature-256", "")
     payload = await request.body()
 
@@ -109,43 +145,33 @@ async def github_webhook(request: Request):
     }
 
 
-def refresh_sessions():
-    """Poll Devin API once and update all tracked sessions"""
-    try:
-        result = list_all_sessions()
-        latest = {s["session_id"]: s for s in result.get("sessions", [])}
-        
-        for session in sessions:
-            session_id = session["session_id"]
-            if session_id in latest:
-                updated = latest[session_id]
-                session["status"] = updated.get("status", "unknown")
-                session["status_detail"] = updated.get("status_detail", "")
-                pull_requests = updated.get("pull_requests", [])
-                session["pr_url"] = pull_requests[0].get("pr_url", "") if pull_requests else ""
-                session["pr_state"] = pull_requests[0].get("pr_state", "") if pull_requests else ""
-                session["updated_at"] = updated.get("updated_at")
-                if not session["created_at"]:
-                    session["created_at"] = updated.get("created_at")
-    except Exception as e:
-        print(f"Could not refresh sessions: {e}")
+@app.get("/stream")
+async def stream():
+    """SSE endpoint that pushes the current session list to the browser every 5 seconds."""
+    async def event_generator():
+        while True:
+            yield f"data: {json.dumps(sessions)}\n\n"
+            await asyncio.sleep(5)
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 
 @app.get("/status")
 async def get_status():
-    """Update and return status of all tracked sessions"""
-    refresh_sessions()
+    """Return current session state as JSON."""
     return {"sessions": sessions}
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    """Visual dashboard showing all Devin sessions"""
-    refresh_sessions()
+    """Serve the live HTML dashboard."""
     return get_dashboard_html(sessions)
 
 
 @app.get("/health")
 async def health():
-    """Simple health check"""
+    """Health check endpoint."""
     return {"status": "ok"}
