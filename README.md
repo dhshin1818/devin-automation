@@ -84,7 +84,7 @@ graph TD
 ## Project structure
 
 ```
-superset-devin-automation/
+devin-automation/
 ├── app/
 │   ├── main.py          # FastAPI app — webhook receiver, session tracker, dashboard
 │   ├── devin.py         # Devin API client — start sessions, poll status, list sessions
@@ -114,8 +114,8 @@ superset-devin-automation/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/dhshin1818/superset-devin-automation.git
-cd superset-devin-automation
+git clone https://github.com/dhshin1818/devin-automation.git
+cd devin-automation
 ```
 
 ### 2. Configure environment variables
